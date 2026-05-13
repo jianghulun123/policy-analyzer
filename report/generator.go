@@ -1,0 +1,359 @@
+﻿// Package report 提供报告生成功能
+//
+// 支持生成 Markdown、PDF 格式的分析报告
+package report
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jung-kurt/gofpdf"
+
+	"policy-analyzer/textutil"
+)
+
+// ReportData 报告数据
+type ReportData struct {
+	Title      string
+	WorkflowID string
+	Status     string
+	Summary    string
+	Content    string
+	Structured *StructuredReport
+	Metrics    Metrics
+	CreatedAt  time.Time
+}
+
+// Metrics 执行指标
+type Metrics struct {
+	Duration     int
+	TokensInput  int
+	TokensOutput int
+	APICalls     int
+}
+
+// Generator 报告生成器
+type Generator struct {
+	title      string
+	fontLoaded bool
+}
+
+// NewGenerator 创建报告生成器
+func NewGenerator(title string) *Generator {
+	return &Generator{title: title}
+}
+
+// GenerateMarkdown 生成 Markdown 格式报告
+func (g *Generator) GenerateMarkdown(data ReportData) ([]byte, error) {
+	var buf bytes.Buffer
+	structured := NormalizeStructuredReport(data.Structured)
+	summary := textutil.NormalizeSummaryText(data.Summary)
+	content := textutil.SanitizeModelOutput(data.Content)
+	if structured != nil {
+		if structured.ExecutiveSummary != "" {
+			summary = structured.ExecutiveSummary
+		}
+		content = RenderStructuredContentMarkdown(structured, content)
+	}
+
+	buf.WriteString(fmt.Sprintf("# %s\n\n", data.Title))
+	buf.WriteString(fmt.Sprintf("> 工作流: %s | 状态: %s | 生成时间: %s\n\n",
+		data.WorkflowID, data.Status, data.CreatedAt.Format("2006-01-02 15:04:05")))
+
+	if summary != "" {
+		buf.WriteString("## 执行摘要\n\n")
+		buf.WriteString(summary)
+		buf.WriteString("\n\n")
+	}
+
+	if content != "" {
+		buf.WriteString("## 分析报告\n\n")
+		buf.WriteString(content)
+		buf.WriteString("\n\n")
+	}
+
+	if data.Metrics.Duration > 0 {
+		buf.WriteString("## 执行指标\n\n")
+		buf.WriteString(fmt.Sprintf("- 执行时长: %d 秒\n", data.Metrics.Duration))
+		buf.WriteString(fmt.Sprintf("- 输入 Token: %d\n", data.Metrics.TokensInput))
+		buf.WriteString(fmt.Sprintf("- 输出 Token: %d\n", data.Metrics.TokensOutput))
+		buf.WriteString(fmt.Sprintf("- API 调用: %d 次\n", data.Metrics.APICalls))
+	}
+
+	buf.WriteString("\n---\n\n")
+	buf.WriteString(fmt.Sprintf("*由 Policy Analyzer 生成于 %s*\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	return buf.Bytes(), nil
+}
+
+// GeneratePDF 生成 PDF 格式报告
+func (g *Generator) GeneratePDF(data ReportData) ([]byte, error) {
+	pdf := gofpdf.New("P", "mm", "A4", "")
+	pdf.SetAutoPageBreak(true, 15)
+
+	// 添加中文字体
+	g.addChineseFont(pdf)
+
+	pdf.AddPage()
+	structured := NormalizeStructuredReport(data.Structured)
+	summary := textutil.NormalizeSummaryText(data.Summary)
+	content := textutil.SanitizeModelOutput(data.Content)
+	if structured != nil {
+		if structured.ExecutiveSummary != "" {
+			summary = structured.ExecutiveSummary
+		}
+		content = RenderStructuredContentMarkdown(structured, content)
+	}
+
+	// 标题
+	if g.fontLoaded {
+		pdf.SetFont("chinese", "B", 18)
+	} else {
+		pdf.SetFont("Arial", "B", 18)
+	}
+	pdf.Cell(0, 12, truncateString(data.Title, 30))
+	pdf.Ln(16)
+
+	// 元信息
+	if g.fontLoaded {
+		pdf.SetFont("chinese", "", 9)
+	} else {
+		pdf.SetFont("Arial", "", 9)
+	}
+	pdf.SetTextColor(128, 128, 128)
+	metaText := fmt.Sprintf("Workflow: %s | Status: %s | Generated: %s",
+		data.WorkflowID, data.Status, data.CreatedAt.Format("2006-01-02 15:04"))
+	pdf.Cell(0, 6, metaText)
+	pdf.Ln(10)
+
+	// 重置颜色
+	pdf.SetTextColor(0, 0, 0)
+
+	// 执行摘要
+	if summary != "" {
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "B", 12)
+		} else {
+			pdf.SetFont("Arial", "B", 12)
+		}
+		pdf.Cell(0, 8, "Executive Summary")
+		pdf.Ln(6)
+
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "", 10)
+		} else {
+			pdf.SetFont("Arial", "", 10)
+		}
+		writeParagraph(pdf, summary, 190)
+		pdf.Ln(6)
+	}
+
+	// 五法解读部分
+	if structured != nil {
+		g.writeFiveMethodsPDF(pdf, structured)
+	}
+
+	// 分析报告
+	if content != "" {
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "B", 12)
+		} else {
+			pdf.SetFont("Arial", "B", 12)
+		}
+		pdf.Cell(0, 8, "Analysis Report")
+		pdf.Ln(6)
+
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "", 10)
+		} else {
+			pdf.SetFont("Arial", "", 10)
+		}
+		pdfContent := processMarkdownForPDF(content)
+		writeParagraph(pdf, pdfContent, 190)
+		pdf.Ln(6)
+	}
+
+	// 执行指标
+	if data.Metrics.Duration > 0 {
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "B", 12)
+		} else {
+			pdf.SetFont("Arial", "B", 12)
+		}
+		pdf.Cell(0, 8, "Metrics")
+		pdf.Ln(6)
+
+		if g.fontLoaded {
+			pdf.SetFont("chinese", "", 10)
+		} else {
+			pdf.SetFont("Arial", "", 10)
+		}
+		metrics := []string{
+			fmt.Sprintf("Duration: %d sec", data.Metrics.Duration),
+			fmt.Sprintf("Input Tokens: %d", data.Metrics.TokensInput),
+			fmt.Sprintf("Output Tokens: %d", data.Metrics.TokensOutput),
+			fmt.Sprintf("API Calls: %d", data.Metrics.APICalls),
+		}
+		for _, m := range metrics {
+			pdf.Cell(0, 5, "  "+m)
+			pdf.Ln(5)
+		}
+	}
+
+	// 页脚
+	pdf.Ln(8)
+	if g.fontLoaded {
+		pdf.SetFont("chinese", "I", 8)
+	} else {
+		pdf.SetFont("Arial", "I", 8)
+	}
+	pdf.SetTextColor(128, 128, 128)
+	pdf.Cell(0, 5, fmt.Sprintf("Generated by Policy Analyzer at %s", time.Now().Format("2006-01-02 15:04:05")))
+
+	// 输出到字节
+	var buf bytes.Buffer
+	err := pdf.Output(&buf)
+	if err != nil {
+		return nil, fmt.Errorf("generate PDF failed: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// writeFiveMethodsPDF 写入五法解读内容到PDF
+func (g *Generator) writeFiveMethodsPDF(pdf *gofpdf.Fpdf, structured *StructuredReport) {
+	fontName := "Arial"
+	if g.fontLoaded {
+		fontName = "chinese"
+	}
+
+	// 措辞变化
+	if len(structured.WordingChanges) > 0 {
+		pdf.SetFont(fontName, "B", 11)
+		pdf.Cell(0, 7, "Wording Changes")
+		pdf.Ln(5)
+		pdf.SetFont(fontName, "", 9)
+		for _, row := range structured.WordingChanges {
+			line := truncateString(fmt.Sprintf("%s: %s -> %s (%s)", row.Topic, row.Old, row.New, row.Signal), 100)
+			writeParagraph(pdf, line, 190)
+		}
+		pdf.Ln(3)
+	}
+
+	// 排序变化
+	if structured.RankingChanges != nil {
+		pdf.SetFont(fontName, "B", 11)
+		pdf.Cell(0, 7, "Ranking Changes")
+		pdf.Ln(5)
+		pdf.SetFont(fontName, "", 9)
+		if len(structured.RankingChanges.Rising) > 0 {
+			writeParagraph(pdf, "Rising: "+strings.Join(structured.RankingChanges.Rising, ", "), 190)
+		}
+		if len(structured.RankingChanges.Falling) > 0 {
+			writeParagraph(pdf, "Falling: "+strings.Join(structured.RankingChanges.Falling, ", "), 190)
+		}
+		if len(structured.RankingChanges.NewItems) > 0 {
+			writeParagraph(pdf, "New: "+strings.Join(structured.RankingChanges.NewItems, ", "), 190)
+		}
+		if len(structured.RankingChanges.Disappeared) > 0 {
+			writeParagraph(pdf, "Disappeared: "+strings.Join(structured.RankingChanges.Disappeared, ", "), 190)
+		}
+		pdf.Ln(3)
+	}
+
+	// 新提法
+	if len(structured.NewPhrases) > 0 {
+		pdf.SetFont(fontName, "B", 11)
+		pdf.Cell(0, 7, "New Phrases")
+		pdf.Ln(5)
+		pdf.SetFont(fontName, "", 9)
+		for _, row := range structured.NewPhrases {
+			line := truncateString(fmt.Sprintf("%s: %s (%s)", row.Phrase, row.Meaning, row.Impact), 100)
+			writeParagraph(pdf, line, 190)
+		}
+		pdf.Ln(3)
+	}
+
+	// 消失提法
+	if len(structured.DisappearedPhrases) > 0 {
+		pdf.SetFont(fontName, "B", 11)
+		pdf.Cell(0, 7, "Disappeared Phrases")
+		pdf.Ln(5)
+		pdf.SetFont(fontName, "", 9)
+		for _, row := range structured.DisappearedPhrases {
+			line := truncateString(fmt.Sprintf("%s: %s (%s)", row.Phrase, row.Context, row.Signal), 100)
+			writeParagraph(pdf, line, 190)
+		}
+		pdf.Ln(3)
+	}
+
+	// 重心迁移
+	if structured.FocusShift != nil {
+		pdf.SetFont(fontName, "B", 11)
+		pdf.Cell(0, 7, "Focus Shift")
+		pdf.Ln(5)
+		pdf.SetFont(fontName, "", 9)
+		if structured.FocusShift.MacroTone != "" {
+			writeParagraph(pdf, "Macro Tone: "+structured.FocusShift.MacroTone, 190)
+		}
+		if len(structured.FocusShift.PriorityDirections) > 0 {
+			writeParagraph(pdf, "Priority: "+strings.Join(structured.FocusShift.PriorityDirections, ", "), 190)
+		}
+		if len(structured.FocusShift.RiskAreas) > 0 {
+			writeParagraph(pdf, "Risk Areas: "+strings.Join(structured.FocusShift.RiskAreas, ", "), 190)
+		}
+		pdf.Ln(3)
+	}
+}
+
+// addChineseFont 添加中文字体支持
+func (g *Generator) addChineseFont(pdf *gofpdf.Fpdf) {
+	// gofpdf 的 AddUTF8Font 方法需要字体文件路径
+	// 由于跨平台兼容性问题，这里使用默认字体
+	// 如果需要中文支持，可以后续添加字体文件
+	g.fontLoaded = false
+}
+
+// writeParagraph 写入段落，自动换行
+func writeParagraph(pdf *gofpdf.Fpdf, text string, width float64) {
+	if text == "" {
+		return
+	}
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			pdf.Ln(3)
+			continue
+		}
+		pdf.MultiCell(width, 4.5, line, "", "", false)
+	}
+}
+
+// processMarkdownForPDF 简化 Markdown 内容以便 PDF 显示
+func processMarkdownForPDF(content string) string {
+	result := content
+
+	// 移除 Markdown 标记
+	result = strings.ReplaceAll(result, "### ", "")
+	result = strings.ReplaceAll(result, "## ", "")
+	result = strings.ReplaceAll(result, "# ", "")
+	result = strings.ReplaceAll(result, "**", "")
+	result = strings.ReplaceAll(result, "__", "")
+	result = strings.ReplaceAll(result, "*", "")
+	result = strings.ReplaceAll(result, "_", "")
+	result = strings.ReplaceAll(result, "```", "")
+	result = strings.ReplaceAll(result, "`", "")
+
+	return result
+}
+
+// truncateString 截断字符串
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-3]) + "..."
+}

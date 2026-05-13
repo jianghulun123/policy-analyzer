@@ -1,0 +1,35 @@
+# 编译产物
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 构建目录
+build/
+
+# 依赖目录
+vendor/
+node_modules/
+
+# IDE 配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 环境配置（可能包含敏感信息）
+.env
+.env.local
+*.local
+
+# 临时文件
+tmp/
+temp/

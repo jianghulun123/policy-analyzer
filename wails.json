@@ -1,0 +1,19 @@
+{
+  "name": "policy-analyzer",
+  "outputfilename": "PolicyAnalyzer",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Imperial Fists",
+    "email": "imperial@fists.io"
+  },
+  "info": {
+    "companyName": "Policy Analyzer Team",
+    "productName": "Policy Analyzer",
+    "productVersion": "1.0.1",
+    "copyright": "Copyright © 2026",
+    "comments": "政策文件对比分析桌面应用 - The Emperor Protects"
+  }
+}
